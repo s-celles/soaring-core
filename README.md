@@ -4,7 +4,7 @@
 a value — not an effect, not a render pass, not a fetch.
 
 A shared kernel for [OGN 3D Viewer](https://github.com/s-celles/ogn-3d-viewer) (a 3D replay of
-glider flights) and **UPDRAFT** (a soaring flight computer). The two could hardly be more
+glider flights) and **VOLPLANE** (a soaring flight computer). The two could hardly be more
 different — one has a WebGL map and a network, the other may have neither — so everything they
 share had to be reduced to arithmetic.
 
