@@ -4,7 +4,7 @@
 // That stencil is the shared primitive; what each component then does with (h, ∇h) is
 // its own physics.
 import { M_PER_LAT, mPerLng } from '../geo';
-import type { ElevSampler } from '../ports';
+import type { ElevSampler, WindProfile } from '../ports';
 
 /** A disc of radius `R` metres around (cLon, cLat), sampled every `step` metres. */
 export interface FieldGrid { cLon: number; cLat: number; R: number; step: number }
@@ -29,6 +29,24 @@ export interface TerrainNodes {
   lon: Float64Array; lat: Float64Array;          // node coordinates, by i and by j
   h: Float32Array; gx: Float32Array; gy: Float32Array;
   ok: Uint8Array; ready: number;
+}
+
+export const WIND_ALT = 400;   // m above the ground: the wind that works the terrain, ~mid-ridge height
+
+/** The wind a terrain field should be driven by: the one over the TYPICAL ground in view — the
+ *  MEDIAN height of what actually loaded — at WIND_ALT above it.
+ *
+ *  Not the wind over the pixel under the camera. That pixel is a coin toss between a lake and
+ *  the peak beside it, and half the time its DEM tile has not even loaded, so the reading falls
+ *  back to some other elevation entirely. Measured over real terrain, it moved the wind by a
+ *  factor of 3 — enough to flip a field's physical gate on and off as the view is panned, so a
+ *  wave layer would appear and vanish with the camera. A median is a statement about the ground.
+ *
+ *  [0, 0] when nothing is loaded or the profile has no answer: an unknown wind is not a guess. */
+export function referenceWind(elevM: number | null, wind: WindProfile): [number, number] {
+  if (elevM == null) return [0, 0];
+  const w = wind(elevM + WIND_ALT);
+  return w ? [w[0], w[1]] : [0, 0];
 }
 
 /** Node spacing (m) of a lattice. */

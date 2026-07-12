@@ -22,6 +22,9 @@ const WEST_WIND = [15, 0] as const;   // 15 m/s towards the east
 const N_STABLE = 0.011;               // 1/s — a stable airstream
 const RIDGE_X = -8000;                // the ridge sits upwind of the domain centre
 const RES = waveResonance(WEST_WIND, N_STABLE)!;
+/** A wind that is the same at every height. */
+const uniform = (u: number, v: number) => () => [u, v] as [number, number];
+const WIND = uniform(15, 0);
 
 /** The field along the centre row (y ≈ 0), west to east. */
 const profile = (f: ReturnType<typeof waveField>) => {
@@ -59,14 +62,14 @@ test('no wave without wind, without stability, or at an implausible wavelength',
 // ---- the wave itself ----
 
 test('flat ground makes no wave, however stable and windy the air', () => {
-  const f = waveField(G, flat, WEST_WIND, { res: RES });
+  const f = waveField(G, flat, WIND, { N: N_STABLE });
   expect(f.ready).toBeGreaterThan(0);   // the ground IS loaded — there is simply nothing to force it
   expect(Array.from(f.w).every(v => v === 0)).toBe(true);
   expect(Array.from(f.eta).every(v => v === 0)).toBe(true);
 });
 
 test('the air upwind of the ridge is undisturbed — the wave is a LEE phenomenon', () => {
-  const prof = profile(waveField(G, ridge(600, 1200, RIDGE_X), WEST_WIND, { res: RES }));
+  const prof = profile(waveField(G, ridge(600, 1200, RIDGE_X), WIND, { N: N_STABLE }));
   // Well upwind of the ridge (more than a couple of ridge-widths), nothing is moving.
   for (const p of prof.filter(p => p.x < RIDGE_X - 4000)) {
     expect(Math.abs(p.w)).toBeLessThan(0.01);
@@ -75,7 +78,7 @@ test('the air upwind of the ridge is undisturbed — the wave is a LEE phenomeno
 });
 
 test('downwind of the ridge the flow oscillates at exactly the resonant wavelength', () => {
-  const prof = profile(waveField(G, ridge(600, 1200, RIDGE_X), WEST_WIND, { res: RES }));
+  const prof = profile(waveField(G, ridge(600, 1200, RIDGE_X), WIND, { N: N_STABLE }));
   const zs = zeros(prof, RIDGE_X);
   expect(zs.length).toBeGreaterThanOrEqual(4);   // several crests and troughs in the domain
   // Successive zero crossings of a sinusoid are half a wavelength apart. The tolerance is
@@ -88,13 +91,13 @@ test('a shorter wavelength comes out of a stronger stability', () => {
   // λ = 2π·U/N: double N, halve λ — the wave train packs together.
   const soft = waveResonance(WEST_WIND, 0.008)!, hard = waveResonance(WEST_WIND, 0.016)!;
   expect(hard.lambda).toBeCloseTo(soft.lambda / 2, 6);
-  const zsSoft = zeros(profile(waveField(G, ridge(600, 1200, RIDGE_X), WEST_WIND, { res: soft })), RIDGE_X);
-  const zsHard = zeros(profile(waveField(G, ridge(600, 1200, RIDGE_X), WEST_WIND, { res: hard })), RIDGE_X);
+  const zsSoft = zeros(profile(waveField(G, ridge(600, 1200, RIDGE_X), WIND, { N: 0.008 })), RIDGE_X);
+  const zsHard = zeros(profile(waveField(G, ridge(600, 1200, RIDGE_X), WIND, { N: 0.016 })), RIDGE_X);
   expect(zsHard.length).toBeGreaterThan(zsSoft.length);   // more crests fit in the same domain
 });
 
 test('the wave train decays downwind', () => {
-  const prof = profile(waveField(G, ridge(600, 1200, RIDGE_X), WEST_WIND, { res: RES }));
+  const prof = profile(waveField(G, ridge(600, 1200, RIDGE_X), WIND, { N: N_STABLE }));
   // Peak |w| in the first wavelength after the ridge, versus two wavelengths further out.
   const peak = (a: number, b: number) =>
     Math.max(...prof.filter(p => p.x >= a && p.x < b).map(p => Math.abs(p.w)));
@@ -104,14 +107,14 @@ test('the wave train decays downwind', () => {
 });
 
 test('a taller ridge drives a stronger wave', () => {
-  const small = profile(waveField(G, ridge(300, 1200, RIDGE_X), WEST_WIND, { res: RES }));
-  const big = profile(waveField(G, ridge(900, 1200, RIDGE_X), WEST_WIND, { res: RES }));
+  const small = profile(waveField(G, ridge(300, 1200, RIDGE_X), WIND, { N: N_STABLE }));
+  const big = profile(waveField(G, ridge(900, 1200, RIDGE_X), WIND, { N: N_STABLE }));
   const amp = (prof: { x: number; w: number }[]) => Math.max(...prof.map(p => Math.abs(p.w)));
   expect(amp(big)).toBeGreaterThan(amp(small));
 });
 
 test('the streamline displacement is clamped, so the stacked sheets can never cross', () => {
-  const f = waveField(G, ridge(3000, 1200, RIDGE_X), WEST_WIND, { res: RES });   // an absurd ridge
+  const f = waveField(G, ridge(3000, 1200, RIDGE_X), WIND, { N: N_STABLE });   // an absurd ridge
   for (const v of f.eta) expect(Math.abs(v)).toBeLessThanOrEqual(ETA_MAX);
   expect(Math.max(...Array.from(f.eta))).toBeCloseTo(ETA_MAX, 6);   // and it does reach the clamp
 });
@@ -120,7 +123,7 @@ test('w and η are a quarter wave out of phase — where the air rises fastest i
   // w is the sine of the response, η the cosine. A quarter-wave shift makes them orthogonal
   // over the wave train, which is the robust way to state it: their correlation is ~0 while
   // each correlates perfectly with itself. Run without the clamp, so the phase is visible.
-  const f = waveField(G, ridge(600, 1200, RIDGE_X), WEST_WIND, { res: RES, etaGain: 10, etaMax: 1e9 });
+  const f = waveField(G, ridge(600, 1200, RIDGE_X), WIND, { N: N_STABLE, etaGain: 10, etaMax: 1e9 });
   const lee = profile(f).filter(p => p.x > RIDGE_X);
   const dot = (a: number[], b: number[]) => a.reduce((s, v, i) => s + v * b[i], 0);
   const W = lee.map(p => p.w), E = lee.map(p => p.eta);
@@ -131,11 +134,11 @@ test('w and η are a quarter wave out of phase — where the air rises fastest i
 // ---- the rotor under the crests ----
 
 test('rotors roll only under strong crests, thinned and capped', () => {
-  const f = waveField(G, ridge(600, 1200, RIDGE_X), WEST_WIND, { res: RES });
+  const f = waveField(G, ridge(600, 1200, RIDGE_X), WIND, { N: N_STABLE });
   const spots = rotorSpots(f);
   expect(spots.length).toBeGreaterThan(0);
   expect(spots.length).toBeLessThanOrEqual(ROTOR_MAX);
-  expect(rotorSpots(waveField(G, flat, WEST_WIND, { res: RES }))).toEqual([]);   // no wave, no rotor
+  expect(rotorSpots(waveField(G, flat, WIND, { N: N_STABLE }))).toEqual([]);   // no wave, no rotor
   // Every spot sits on the ground it was found over, and grows with its crest.
   for (const s of spots) {
     expect(s.elev).toBeGreaterThan(0);
@@ -147,21 +150,41 @@ test('rotors roll only under strong crests, thinned and capped', () => {
 test('the cap holds even when a single row is full of crests', () => {
   // A long ridge across the flow puts a strong crest in every column, so one row alone can
   // fill the quota. The cap has to be honoured per spot, not per row.
-  const f = waveField(G, ridge(1500, 3000, RIDGE_X), WEST_WIND, { res: RES });
+  const f = waveField(G, ridge(1500, 3000, RIDGE_X), WIND, { N: N_STABLE });
   expect(rotorSpots(f, 1, 5).length).toBe(5);        // thinning off: every node qualifies
   expect(rotorSpots(f, 1, 1).length).toBe(1);
 });
 
 test('a weak wave spins no rotor', () => {
-  const f = waveField(G, ridge(600, 1200, RIDGE_X), WEST_WIND, { res: RES, amp: 0.01 });
+  const f = waveField(G, ridge(600, 1200, RIDGE_X), WIND, { N: N_STABLE, amp: 0.01 });
   expect(Math.max(...Array.from(f.w))).toBeLessThan(ROTOR_W);
   expect(rotorSpots(f)).toEqual([]);
 });
 
 // ---- the field must say "I could not look", not "there is nothing here" ----
 
+test('the wind that forces the wave is read over the TYPICAL ground, not under the camera', () => {
+  // A ridge in a wind that strengthens with height. On real terrain, reading the wind at the
+  // pixel under the camera gave 3.9 m/s where the median ground gave 10.6 — one side of
+  // WIND_MIN, then the other. The wave layer literally appeared and vanished as the view panned.
+  const sheared = (alt: number) => [alt / 150, 0] as [number, number];   // 0 at sea level, +6.7 m/s per km
+  const f = waveField(G, ridge(600, 1200, RIDGE_X), sheared, { N: N_STABLE });
+  expect(f.refElev).not.toBeNull();
+  expect(f.wind[0]).toBeCloseTo((f.refElev! + 400) / 150, 6);   // the profile, at the median + WIND_ALT
+  expect(f.res).not.toBeNull();                                  // and it is enough to make wave
+  // The same terrain in a wind read 400 m lower down would be under WIND_MIN and make none.
+  expect(Math.hypot(...(f.wind))).toBeGreaterThan(7);
+});
+
+test('no resonance means an empty field, not a crash', () => {
+  const f = waveField(G, ridge(600, 1200, RIDGE_X), uniform(3, 0), { N: N_STABLE });   // too little wind
+  expect(f.res).toBeNull();
+  expect(Array.from(f.w).every(v => v === 0)).toBe(true);
+  expect(rotorSpots(f)).toEqual([]);
+});
+
 test('unloaded terrain reports zero ready nodes, so the caller knows not to trust the calm', () => {
-  const f = waveField(G, () => null, WEST_WIND, { res: RES });
+  const f = waveField(G, () => null, WIND, { N: N_STABLE });
   expect(f.ready).toBe(0);
   expect(f.total).toBe(G.n * G.n);
   expect(Array.from(f.w).every(v => v === 0)).toBe(true);

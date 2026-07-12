@@ -19,7 +19,9 @@ const flat: ElevSampler = () => 1000;
 const gauss = (h: number, L: number): ElevSampler =>
   (lon, lat) => 1000 + h * Math.exp(-(east(lon) ** 2 + north(lat) ** 2) / (2 * L * L));
 
-const WEST_WIND = [8, 0] as const;   // blowing towards the east
+/** A wind that is the same at every height — what the field used to be handed for the whole scene. */
+const uniform = (u: number, v: number) => () => [u, v] as [number, number];
+const WEST_WIND = uniform(8, 0);   // blowing towards the east
 const noSun = { insol: 0, water: null };
 const HILL = gauss(400, 900), BOWL = gauss(-400, 900);
 
@@ -63,15 +65,15 @@ test('the field is normalised: its value does not depend on the wind speed', () 
   // It is a *fraction of the wind lost per cell*, dimensionless — so it can be compared
   // across a calm day and a windy one, and across zoom levels. Doubling the wind doubles
   // the divergence and the normaliser alike.
-  const slow = convergField(G, BOWL, [3, 0], noSun);
-  const fast = convergField(G, BOWL, [12, 0], noSun);
+  const slow = convergField(G, BOWL, uniform(3, 0), noSun);
+  const fast = convergField(G, BOWL, uniform(12, 0), noSun);
   expect(slow.cells.length).toBe(fast.cells.length);
   expect(net(slow.cells)).toBeCloseTo(net(fast.cells), 6);
 });
 
 test('reversing the wind mirrors the field about the terrain', () => {
-  const east0 = convergField(G, BOWL, [8, 0], noSun);
-  const west0 = convergField(G, BOWL, [-8, 0], noSun);
+  const east0 = convergField(G, BOWL, uniform(8, 0), noSun);
+  const west0 = convergField(G, BOWL, uniform(-8, 0), noSun);
   const a = at(east0.cells, 255, -85), b = at(west0.cells, -255, -85);
   expect(a).not.toBeNull();
   expect(b!.c).toBeCloseTo(a!.c, 6);
@@ -87,7 +89,7 @@ const shoreline = (g: NodeGrid): Float32Array => {
 };
 
 test('a sunny shoreline lifts just inland and sinks over the water, with no wind at all', () => {
-  const f = convergField(G, flat, [0, 0], { insol: 1, water: shoreline(G) });
+  const f = convergField(G, flat, uniform(0, 0), { insol: 1, water: shoreline(G) });
   expect(f.cells.length).toBeGreaterThan(0);
   // The breeze does not converge *at* the shore but ~a blur-width inland (LB_BLUR cells,
   // ~850 m here): the curvature of a smoothed step is zero at the step and peaks at its edges.
@@ -100,18 +102,29 @@ test('a strong synoptic wind washes the lake breeze out', () => {
   // Below the drawing threshold the blown-out breeze would vanish entirely, so look under
   // it: the point is that the value collapses, not merely that it stops being drawn.
   const p = { insol: 1, water: shoreline(G), convMin: 0.001 };
-  const calm = convergField(G, flat, [0, 0], p);
-  const blown = convergField(G, flat, [12, 0], p);
+  const calm = convergField(G, flat, uniform(0, 0), p);
+  const blown = convergField(G, flat, uniform(12, 0), p);
   expect(at(blown.cells, 900, 0)!.c).toBeLessThan(at(calm.cells, 900, 0)!.c);
   expect(at(blown.cells, 900, 0)!.c).toBeGreaterThan(0);   // damped to a fifth, not reversed
 });
 
 test('no sun means no breeze, whatever the shoreline', () => {
-  const f = convergField(G, flat, [0, 0], { insol: 0, water: shoreline(G) });
+  const f = convergField(G, flat, uniform(0, 0), { insol: 0, water: shoreline(G) });
   expect(f.cells).toEqual([]);
 });
 
 // ---- the field must say "I could not look", not "there is nothing here" ----
+
+test('the wind is read over the TYPICAL ground, not the pixel under the camera', () => {
+  // Ground that rises eastward, in a wind that strengthens with height. The field must be
+  // driven by the wind over the MEDIAN terrain — on real terrain, reading it under the camera
+  // swung the wind by a factor of 3 and flipped this field's gate on and off as the view panned.
+  const sheared = (alt: number) => [alt / 400, 0] as [number, number];   // 0 at sea level
+  const f = convergField(G, gauss(-400, 900), sheared, noSun);
+  expect(f.refElev).not.toBeNull();
+  expect(f.wind[0]).toBeCloseTo((f.refElev! + 400) / 400, 6);   // the profile, at the median + WIND_ALT
+  expect(f.cells.length).toBeGreaterThan(0);
+});
 
 test('calm and dark with no water is not a field at all', () => {
   expect(convergActive([0.2, 0], false)).toBe(false);

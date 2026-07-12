@@ -11,8 +11,8 @@
 // field — which the kernel takes as *data*, never fetching it.
 //
 // Rough and illustrative (see the docs), but a value: no renderer, no app state.
-import { sampleNodes, boxBlur, nodeStep, type NodeGrid, type TerrainCell } from './grid';
-import type { ElevSampler } from '../ports';
+import { sampleNodes, boxBlur, nodeStep, medianElev, referenceWind, type NodeGrid, type TerrainCell } from './grid';
+import type { ElevSampler, WindProfile } from '../ports';
 
 export const GB = 110;          // terrain-gradient baseline (m)
 export const ALPHA = 0.85;      // how strongly terrain blocks the into-slope wind component
@@ -37,7 +37,15 @@ export interface ConvergParams {
  *  of the wind lost per cell, so it does not change with the view. Positive = rising. */
 export interface ConvCell extends TerrainCell { c: number }
 
-export interface ConvergField { grid: NodeGrid; cells: ConvCell[]; ready: number; total: number }
+/** `wind` is the reference wind the whole field was deflected by — the one over the TYPICAL
+ *  ground in view, reported so a caller can key a cache on it. `refElev` is the ground it was
+ *  read at. The wind is deliberately UNIFORM here: the field takes the DIVERGENCE of the
+ *  deflected flow, and a wind that varied with the terrain height would inject a divergence of
+ *  its own — one that is an artefact of terrain-following sampling, not a fact about the air. */
+export interface ConvergField {
+  grid: NodeGrid; cells: ConvCell[]; ready: number; total: number;
+  refElev: number | null; wind: [number, number];
+}
 
 /** Can there be convergence here at all? A calm day with no shoreline has neither a flow
  *  to deflect nor a heating contrast to drive one. Cheap enough to ask before any terrain work. */
@@ -46,17 +54,23 @@ export function convergActive(wind: readonly [number, number], hasWater: boolean
 }
 
 export function convergField(
-  g: NodeGrid, elev: ElevSampler, wind: readonly [number, number], p: ConvergParams,
+  g: NodeGrid, elev: ElevSampler, windProfile: WindProfile, p: ConvergParams,
 ): ConvergField {
   const gb = p.gb ?? GB, alpha = p.alpha ?? ALPHA, convMin = p.convMin ?? CONV_MIN;
   const lbGain = p.lbGain ?? LB_GAIN, lbBlur = p.lbBlur ?? LB_BLUR, lbWater = p.lbWater ?? LB_WATER;
   const n = g.n, total = n * n;
-  const spd = Math.hypot(wind[0], wind[1]);
   const breeze = p.insol > 0 && p.water ? p.water : null;
-  if (!convergActive(wind, !!breeze)) return { grid: g, cells: [], ready: 0, total };
 
   const t = sampleNodes(g, elev, gb);
   const { ok, h, gx, gy, lon, lat, sp } = t;
+
+  // The wind over the typical ground in view — not over the pixel under the camera. See
+  // referenceWind: reading it there swung the wind by a factor of 3 and flipped this field's
+  // gate on and off as the view panned.
+  const refElev = medianElev(t);
+  const wind = referenceWind(refElev, windProfile);
+  const spd = Math.hypot(wind[0], wind[1]);
+  if (!convergActive(wind, !!breeze)) return { grid: g, cells: [], ready: 0, total, refElev, wind };
 
   // Pass 1: deflect the wind around the terrain (remove its into-slope component) — a
   // planar slope just turns the flow, but where slopes *converge* the flow decelerates.
@@ -107,7 +121,7 @@ export function convergField(
     const idx = j * n + i;
     cells.push({ lon: lon[i], lat: lat[j], elev: h[idx], gx: gx[idx], gy: gy[idx], c });
   }
-  return { grid: g, cells, ready: t.ready, total };
+  return { grid: g, cells, ready: t.ready, total, refElev, wind };
 }
 
 /** Node spacing of the field's grid — the layer needs it to size its patches. */

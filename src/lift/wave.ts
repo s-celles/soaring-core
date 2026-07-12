@@ -9,8 +9,8 @@
 //
 // The wave is an ELEVATED phenomenon: nothing here is draped on the ground, and nothing
 // here draws. Rough (see the docs), but a value.
-import { sampleNodes, type NodeGrid } from './grid';
-import type { ElevSampler } from '../ports';
+import { sampleNodes, medianElev, referenceWind, type NodeGrid } from './grid';
+import type { ElevSampler, WindProfile } from '../ports';
 
 export const GB = 140;          // terrain-gradient baseline (m)
 export const WIND_MIN = 7;      // m/s: weakest cross-ridge wind that makes wave (~25 km/h)
@@ -40,7 +40,9 @@ export function waveResonance(wind: readonly [number, number], N: number): Reson
 }
 
 export interface WaveParams {
-  res: Resonance;
+  /** Brunt–Väisälä frequency (1/s) from the sounding. The RESONANCE is not passed in: it depends
+   *  on the wind, and the right wind depends on the terrain, which only this function has. */
+  N: number;
   gb?: number; amp?: number; etaGain?: number; etaMax?: number;
 }
 
@@ -48,25 +50,42 @@ export interface WaveParams {
  *  and the streamline displacement `eta` (m). `h` and `maxTerr` come along because the
  *  sheets are stacked above the highest ridge and the rotor sits just above the ground. */
 export interface WaveField {
-  grid: NodeGrid; res: Resonance;
+  grid: NodeGrid;
+  /** Null when there is no wave: too little wind to force one, air too neutral, or an
+   *  implausible wavelength. The field is then empty. */
+  res: Resonance | null;
+  refElev: number | null; wind: [number, number];
   lon: Float64Array; lat: Float64Array;                     // node coordinates, by i and by j
   w: Float32Array; eta: Float32Array; h: Float32Array; ok: Uint8Array;
   maxTerr: number; ready: number; total: number;
 }
 
 export function waveField(
-  g: NodeGrid, elev: ElevSampler, wind: readonly [number, number], p: WaveParams,
+  g: NodeGrid, elev: ElevSampler, windProfile: WindProfile, p: WaveParams,
 ): WaveField {
   const gb = p.gb ?? GB, amp = p.amp ?? AMP;
   const etaGain = p.etaGain ?? ETA_GAIN, etaMax = p.etaMax ?? ETA_MAX;
-  const { l, lambda } = p.res;
   const n = g.n, total = n * n;
-  const spd = Math.hypot(wind[0], wind[1]);
 
   // Pass 1: terrain forcing along the wind, w₀ = wind·∇terrain (m/s), per node; and the
   // highest ridge, so the elevated sheets can sit above the terrain.
   const t = sampleNodes(g, elev, gb);
   const { ok, h, gx, gy, sp, lon, lat } = t;
+
+  // The wind that crosses the RIDGES, read over the typical ground in view. Reading it under
+  // the camera swung it by a factor of 3 on real terrain — enough to put the wind on either
+  // side of WIND_MIN, so the wave appeared and vanished as the view was panned.
+  const refElev = medianElev(t);
+  const wind = referenceWind(refElev, windProfile);
+  const res = waveResonance(wind, p.N);
+  const empty = (): WaveField => ({
+    grid: g, res: null, refElev, wind, lon, lat,
+    w: new Float32Array(total), eta: new Float32Array(total), h, ok,
+    maxTerr: -Infinity, ready: t.ready, total,
+  });
+  if (!res) return empty();
+  const { l, lambda } = res;
+  const spd = Math.hypot(wind[0], wind[1]);
   const F = new Float32Array(total);
   let maxTerr = -Infinity;
   for (let idx = 0; idx < total; idx++) {
@@ -94,7 +113,7 @@ export function waveField(
     w[idx] = ws * amp * stepM / lambda;
     eta[idx] = Math.max(-etaMax, Math.min(etaMax, we * etaGain * stepM / lambda));
   }
-  return { grid: g, res: p.res, lon, lat, w, eta, h, ok, maxTerr, ready: t.ready, total };
+  return { grid: g, res, refElev, wind, lon, lat, w, eta, h, ok, maxTerr, ready: t.ready, total };
 }
 
 /** Where a rotor rolls: a spot under a crest whose updraft is strong enough to spin one,

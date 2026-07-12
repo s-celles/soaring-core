@@ -7,16 +7,17 @@
 // and on a sunny day the heated slopes drive an up-slope (anabatic) flow that lifts even
 // when the synoptic wind is calm. Rough and illustrative (see docs) — but a *value*: no
 // renderer, no app state, no network.
-import { sampleDisc, medianCellElev, type FieldGrid, type TerrainCell } from './grid';
+import { sampleDisc, medianCellElev, referenceWind, WIND_ALT, type FieldGrid, type TerrainCell } from './grid';
 import { M_PER_LAT, mPerLng } from '../geo';
 import type { ElevSampler, WindProfile } from '../ports';
+
+export { WIND_ALT };
 
 export const LU = 900;          // upwind probe distance for terrain sheltering (m)
 export const H_SHELTER = 320;   // upwind terrain this much higher → wind ~fully sheltered (m)
 export const W_MIN = 0.4;       // m/s: weakest slope lift / sink worth reporting
 export const ANA_GAIN = 4.0;    // anabatic (thermal upslope) wind gain — sunny slopes lift on calm days
 export const INSOL_REF = 0.25;  // sin(sun elevation) at which daytime heating saturates the anabatic wind
-export const WIND_ALT = 400;    // m above the ground: the wind that works a slope, ~mid-ridge height
 const CALM = 0.5;               // m/s: below this the wind has no direction worth sheltering from
 const WIND_MIN = 1.5;           // m/s: below this, only the sun can make slope lift
 
@@ -63,8 +64,8 @@ export function ridgeField(
   // The reference wind: the one over the TYPICAL ground in view (the median of what loaded),
   // not over whatever pixel the camera happens to sit on. It decides whether there is a field
   // at all; each cell then gets the wind at its own height.
-  const refElev = medianCellElev(ground) ?? 0;
-  const refWind = wind(refElev + WIND_ALT) ?? [0, 0];
+  const refElev = medianCellElev(ground);
+  const refWind = referenceWind(refElev, wind);
   if (!ridgeActive(refWind, su)) return { grid: g, cells: [], sampled: 0, wind: [refWind[0], refWind[1]] };
 
   const cells: LiftCell[] = [];
