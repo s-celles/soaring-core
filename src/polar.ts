@@ -9,6 +9,11 @@
 // airspeed, so we substitute GPS ground speed (biased by wind/turns) — see the docs.
 // The reference glider (ASK 21) ships as a bundled `.plr` under data/polars/, parsed here
 // through the very same path a user import takes.
+/// <reference path="./plr.d.ts" />
+// The triple-slash is load-bearing, not decoration: an ambient module declaration is only
+// seen by a compiler that has been told to load the file, and nothing IMPORTS a .d.ts. Inside
+// this package tsconfig's `include` picks it up; inside a CONSUMER's node_modules it would not,
+// and the consumer's typecheck fails on this very import. The reference makes it travel.
 import ask21Plr from '../data/polars/ASK 21.plr' with { type: 'text' };
 
 export interface Polar { name: string; A: number; B: number; vMin: number; vMax: number }
