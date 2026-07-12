@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      # The kernel must compile for a runtime with no browser: tsconfig drops DOM from `lib`,
+      # so a stray `document.` is a COMPILE error here, not a review comment.
+      - name: Typecheck
+        run: bun run typecheck
+
+      # 160 tests, including purity.test.ts — the architecture guard that fails the build if a
+      # renderer import, an app-state import or a browser global creeps back in.
+      - name: Test
+        run: bun test

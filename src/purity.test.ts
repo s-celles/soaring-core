@@ -1,9 +1,12 @@
-// ============ architecture guard: src/core stays pure ============
-// src/core is the soaring kernel meant to be shared with other apps (a flight
-// computer has no map renderer and may have no DOM at all). To stay shareable it
-// must depend on NOTHING app-specific: no deck.gl/luma, no shared mutable app
-// state (src/state.ts), no browser globals. This test fails the build if a new
-// import or a stray `document.` sneaks in — the boundary is checked, not trusted.
+// ============ architecture guard: the kernel stays pure ============
+// This package is the soaring kernel, shared by a 3D replay viewer and a flight computer.
+// A flight computer has no map renderer and may have no DOM at all, so the kernel must
+// depend on NOTHING app-specific: no deck.gl/luma, no app state, no browser globals.
+//
+// tsconfig already drops DOM from `lib`, so the COMPILER refuses a browser global. This
+// test guards what the compiler cannot see: a banned package creeping into an import, a
+// relative path climbing out of src/, a `document.` inside a string or a type-less file.
+// The boundary is checked, not trusted.
 import { test, expect } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -47,8 +50,8 @@ test('core never reaches outside itself (except bundled data assets)', () => {
       if (!spec.startsWith('.')) continue;                       // bare package: covered above
       const target = join(CORE, dirname(file), spec);            // absolute, normalised
       const escapes = !target.startsWith(CORE + '/');
-      const isDataAsset = /^\.\.\/\.\.\/data\//.test(spec);
-      expect(`${file} → ${spec}`).toBe(escapes && !isDataAsset ? 'MUST NOT ESCAPE src/core' : `${file} → ${spec}`);
+      const isDataAsset = /^\.\.\/data\//.test(spec);   // bundled polars — inert assets, not code
+      expect(`${file} → ${spec}`).toBe(escapes && !isDataAsset ? 'MUST NOT ESCAPE src/' : `${file} → ${spec}`);
     }
 });
 
