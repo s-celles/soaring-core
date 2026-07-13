@@ -1,6 +1,6 @@
 {
   "name": "soaring-core",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "The soaring domain as values: terrain, atmosphere, lift fields, flight maths, places and the vario's voice — with no renderer, no app state and no network.",
   "license": "AGPL-3.0",
   "type": "module",

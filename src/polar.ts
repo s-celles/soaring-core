@@ -31,10 +31,31 @@ function fit(pts: [number, number][]): { A: number; B: number } {
   if (!det) return { A: 0, B: 0 };
   return { A: (sxw * syy - syw * sxy) / det, B: (sxx * syw - sxy * sxw) / det };
 }
+/** The flight envelope a polar is clamped to. It is a property of the WING, not a constant of the
+ *  library — and treating it as a constant is a bug real data found.
+ *
+ *  A `.plr` carries no envelope, so [VMIN, VMAX] is the sensible default FOR A GLIDER. But the
+ *  polar files in circulation also describe paragliders and hang gliders, and a paraglider's
+ *  FASTEST measured point (≈ 44 km/h) is slower than a glider's SLOWEST (54 km/h). Clamped into
+ *  the glider envelope, every speed such a wing is asked about comes back as 54 km/h — faster
+ *  than it can fly — and `sinkAt` does not fail: it answers, confidently, a number that is wrong.
+ *  Everything downstream (speed to fly, best glide, the reach polygon) then inherits it.
+ *
+ *  So: when the whole measured range lies BELOW the glider envelope, the wing is not a glider and
+ *  its own points define its envelope. A glider's polar is untouched — its points sit inside
+ *  [15, 60] and the default stands. */
+function envelope(speedsMs: number[]): { vMin: number; vMax: number } {
+  const lo = Math.min(...speedsMs), hi = Math.max(...speedsMs);
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi >= VMIN) return { vMin: VMIN, vMax: VMAX };
+  // A little either side of what was measured: a wing flies slightly slower and slightly faster
+  // than the three points someone happened to record.
+  return { vMin: Math.max(1, lo * 0.85), vMax: hi * 1.15 };
+}
+
 // Build a polar from three (speed km/h, sink m/s ≤ 0) points.
 function make(name: string, pts: [number, number][]): Polar {
   const ms = pts.map(([v, s]) => [v / 3.6, s > 0 ? -s : s] as [number, number]);
-  return { name, ...fit(ms), vMin: VMIN, vMax: VMAX };
+  return { name, ...fit(ms), ...envelope(ms.map(([v]) => v)) };
 }
 
 /** The reference glider (ASK 21), from the bundled data/polars/ASK 21.plr. */
