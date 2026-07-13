@@ -1,7 +1,7 @@
 {
   "name": "soaring-core",
-  "version": "0.3.0",
-  "description": "The soaring domain as values: terrain, atmosphere, lift fields and flight maths — with no renderer, no app state and no network.",
+  "version": "0.4.0",
+  "description": "The soaring domain as values: terrain, atmosphere, lift fields, flight maths, places and the vario's voice — with no renderer, no app state and no network.",
   "license": "AGPL-3.0",
   "type": "module",
   "author": "Sébastien Celles",
@@ -18,7 +18,10 @@
     "thermal",
     "wave",
     "ridge-lift",
-    "vario"
+    "vario",
+    "waypoints",
+    "cup",
+    "poi"
   ],
   "exports": {
     ".": "./src/index.ts",
