@@ -102,3 +102,26 @@ export function parsePlr(text: string, name: string): Polar | null {
   }
   return null;
 }
+
+/** The same glider at a different all-up mass — the classic mass scaling of a polar (CFG-002).
+ *
+ *  A heavier glider flies the SAME aerodynamic curve, only faster and sinking faster in the same
+ *  proportion: with k = √(m/m₀), every point (V, w) of the polar moves to (k·V, k·w). Its glide
+ *  ratio at each corresponding point is therefore UNCHANGED — ballast buys speed, not performance,
+ *  and a pilot who reads a better L/D after taking water has been told something false.
+ *
+ *  Pushing (kV, kw) through w(V) = A·V³ + B/V gives A' = A/k² and B' = B·k², and the usable speed
+ *  band stretches by k with the curve — a ballasted glider does not fly the empty one's stall speed.
+ *
+ *  A mass nobody could have meant — zero, negative, NaN — is not an adjustment, so the polar comes
+ *  back untouched rather than silently disfigured. There is no such thing as a glider of mass 0,
+ *  and the answer to being asked for one is not a polar of infinite performance.
+ *
+ *  This lives in the kernel, not in an app, because it is the same algebra as sinkAt() and it is
+ *  the same algebra for every flight computer ever written on this library. */
+export function atMass(p: Polar, refMassKg: number, massKg: number): Polar {
+  if (!Number.isFinite(massKg) || massKg <= 0) return p;
+  if (!Number.isFinite(refMassKg) || refMassKg <= 0) return p;
+  const k = Math.sqrt(massKg / refMassKg);
+  return { name: p.name, A: p.A / (k * k), B: p.B * k * k, vMin: p.vMin * k, vMax: p.vMax * k };
+}
