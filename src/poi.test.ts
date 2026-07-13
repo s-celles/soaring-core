@@ -78,6 +78,39 @@ test('the runway and the frequency reach the caller — a landable is checked be
   expect(ost.elevM).toBeCloseTo(4, 6);
 });
 
+test('CUP 1.0: the columns come from the file\'s own header, not from a fixed position', () => {
+  // What SeeYou writes TODAY. `rwwidth` sits between rwlen and freq, shifting freq and desc one to
+  // the right — and a parser that skips the header and reads f[9] therefore reports the runway
+  // WIDTH as the frequency: "30.0m" printed in the column a pilot reads to tune his radio before
+  // an outlanding, with the real 123.500 nowhere on his screen. It parses SILENTLY (the row is
+  // well-formed, so `refused` stays 0), which makes it exactly the failure this module exists to
+  // refuse: a wrong number wearing the authority of a right one.
+  const modern = [
+    'name,code,country,lat,lon,elev,style,rwdir,rwlen,rwwidth,freq,desc,userdata,pics',
+    '"ST AUBAN",LFMX,FR,4403.550N,00559.550E,458.0m,4,175,1000.0m,30.0m,123.500,"Gliding airfield",,',
+  ].join('\n');
+
+  const { pois, refused } = parseCup(modern);
+  expect(refused).toBe(0);
+  const p = pois[0];
+
+  expect(p.freq).toBe('123.500');                    // the radio, not the tarmac
+  expect(p.desc).toBe('Gliding airfield');
+  expect(p.rwlenM).toBeCloseTo(1000, 6);
+  expect(p.rwdirDeg).toBe(175);
+  expect(p.elevM).toBeCloseTo(458, 6);
+  expect(p.cat).toBe('airfield-gliding');            // the columns before rwwidth still land right
+});
+
+test('a .cup with no header at all still reads, in the legacy eleven-column order', () => {
+  // Plenty of files in circulation carry no header row. The fixed order is the FALLBACK — never
+  // the assumption.
+  const { pois, refused } = parseCup('OMARAMA,OMA,NZ,4429.000S,16957.000E,430.0m,4,,,122.800,\n');
+  expect(refused).toBe(0);
+  expect(pois[0].freq).toBe('122.800');
+  expect(pois[0].lat).toBeCloseTo(-(44 + 29 / 60), 6);
+});
+
 test('landable is four categories, stated as data — and a summit is not one of them', () => {
   expect(LANDABLE_CATS.length).toBe(4);
   expect(isLandable('airfield-gliding')).toBe(true);

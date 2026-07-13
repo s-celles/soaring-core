@@ -169,7 +169,46 @@ export function catOfCupStyle(style: number | null): PoiCat {
   }
 }
 
-/** SeeYou `.cup`: name,code,country,lat,lon,elev,style,rwdir,rwlen,freq,desc
+/** The columns a .cup row can carry that we know what to do with. Anything else the format has
+ *  grown — userdata, pics, whatever comes next — is carried by nobody and costs nothing. */
+type CupColumn = 'name' | 'code' | 'country' | 'lat' | 'lon' | 'elev' | 'style'
+  | 'rwdir' | 'rwlen' | 'freq' | 'desc';
+
+const CUP_COLUMNS: readonly CupColumn[] =
+  ['name', 'code', 'country', 'lat', 'lon', 'elev', 'style', 'rwdir', 'rwlen', 'freq', 'desc'];
+
+/** The LEGACY layout: the eleven columns a .cup had before SeeYou grew a runway WIDTH. Used only
+ *  when a file carries no header at all. */
+const CUP_LEGACY: Record<CupColumn, number> =
+  { name: 0, code: 1, country: 2, lat: 3, lon: 4, elev: 5, style: 6, rwdir: 7, rwlen: 8, freq: 9, desc: 10 };
+
+/** Read the header row into column → index, or answer null when it does not name the things a
+ *  place IS (name, lat, lon) — a header we cannot steer by is one we ignore.
+ *
+ *  Reading it, rather than skipping it, is the whole point. CUP 1.0 — the layout SeeYou writes
+ *  TODAY — inserts `rwwidth` between rwlen and freq:
+ *
+ *      name,code,country,lat,lon,elev,style,rwdir,rwlen,rwwidth,freq,desc,userdata,pics
+ *
+ *  Under the fixed legacy positions, a row `…,1000.0m,30.0m,123.500,"…"` therefore parses to a
+ *  frequency of **"30.0m"** — the runway WIDTH, printed in the column a pilot reads to tune his
+ *  radio before an outlanding, with the real 123.500 nowhere on his screen. And it parses
+ *  SILENTLY: the row is well-formed, so `refused` stays 0 and this module's "drop and count what
+ *  we cannot read" discipline never fires. A wrong number wearing the authority of a right one is
+ *  worse than a missing one, which is the rule the whole file is built on — and the file was
+ *  telling us where its columns were all along. */
+function cupLayout(header: readonly string[]): Record<CupColumn, number | undefined> | null {
+  const l: Partial<Record<CupColumn, number>> = {};
+  header.forEach((h, i) => {
+    const key = h.trim().replace(/^"|"$/g, '').trim().toLowerCase() as CupColumn;
+    if (CUP_COLUMNS.includes(key) && l[key] === undefined) l[key] = i;
+  });
+  if (l.name == null || l.lat == null || l.lon == null) return null;
+  return l as Record<CupColumn, number | undefined>;
+}
+
+/** SeeYou `.cup`. The column order is taken from the file's own HEADER when it has one — see
+ *  `cupLayout` — and falls back to the legacy eleven-column order only when it has none.
  *
  *  Two things end a .cup's waypoint section and must not be parsed as places: the header row,
  *  and the `-----Related Tasks-----` divider after which the file describes TASKS. A parser
@@ -177,32 +216,41 @@ export function catOfCupStyle(style: number | null): PoiCat {
 export function parseCup(text: string): PoiFile {
   const pois: Poi[] = [];
   let refused = 0;
+  let layout: Record<CupColumn, number | undefined> = CUP_LEGACY;
+
   for (const line of text.split(/\r?\n/)) {
     const l = line.trim();
     if (!l) continue;
     if (/^-{3,}/.test(l)) break;                        // the task section: the places are over
-    if (/^"?name"?\s*,/i.test(l)) continue;             // the header
+    if (/^"?name"?\s*,/i.test(l)) {                     // the header — read it, do not discard it
+      layout = cupLayout(csvCells(line)) ?? CUP_LEGACY;
+      continue;
+    }
     const f = csvCells(line);
     if (f.length < 6) { refused++; continue; }
+    const at = (c: CupColumn): string | undefined => {
+      const i = layout[c];
+      return i == null ? undefined : f[i];
+    };
 
-    const name = str(f[0]);
-    const lat = coordOf(f[3]), lon = coordOf(f[4]);
+    const name = str(at('name'));
+    const lat = coordOf(at('lat')), lon = coordOf(at('lon'));
     // A place with no name or no position is not a place. Refuse it whole (and count it) —
     // never a "(unnamed)" marker at coordinates nobody vouched for.
     if (name == null || lat == null || lon == null) { refused++; continue; }
 
-    const style = num(f[6]);
+    const style = num(at('style'));
     pois.push({
       name,
-      code: str(f[1]),
-      country: str(f[2]),
+      code: str(at('code')),
+      country: str(at('country')),
       lon, lat,
-      elevM: lengthOf(f[5]),                            // NULL if unreadable — see the header
+      elevM: lengthOf(at('elev')),                      // NULL if unreadable — see the header
       cat: catOfCupStyle(style),
-      rwdirDeg: num(f[7]),
-      rwlenM: lengthOf(f[8]),
-      freq: str(f[9]),
-      desc: str(f[10]),
+      rwdirDeg: num(at('rwdir')),
+      rwlenM: lengthOf(at('rwlen')),
+      freq: str(at('freq')),
+      desc: str(at('desc')),
       raw: style == null ? null : String(style),
     });
   }
