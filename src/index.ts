@@ -31,6 +31,7 @@ export * as weather from './weather';   // the atmosphere: profile, sounding, LC
 export * as flight from './flight';     // position, vario, attitude, stats
 export * as polar from './polar';       // sink, netto, super-netto, .plr import
 export * as varioaudio from './varioaudio';   // the sound of the air: the LAW, not the loudspeaker
+export * as alarmvoice from './alarmvoice';   // the alarms: a warble no vario can be mistaken for
 export * as igc from './igc';
 export * as poi from './poi';           // places: waypoints, airfields, landables — and the files that carry them
 export * as trackImport from './track-import';
