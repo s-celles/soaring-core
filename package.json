@@ -1,10 +1,10 @@
 {
   "name": "soaring-core",
-  "version": "0.2.0",
-  "description": "The soaring domain as values: terrain, atmosphere, lift fields and flight maths \u2014 with no renderer, no app state and no network.",
+  "version": "0.3.0",
+  "description": "The soaring domain as values: terrain, atmosphere, lift fields and flight maths — with no renderer, no app state and no network.",
   "license": "AGPL-3.0",
   "type": "module",
-  "author": "S\u00e9bastien Celles",
+  "author": "Sébastien Celles",
   "repository": {
     "type": "git",
     "url": "https://github.com/s-celles/soaring-core.git"
@@ -17,7 +17,8 @@
     "igc",
     "thermal",
     "wave",
-    "ridge-lift"
+    "ridge-lift",
+    "vario"
   ],
   "exports": {
     ".": "./src/index.ts",

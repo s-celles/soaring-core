@@ -30,6 +30,7 @@ export * as weather from './weather';   // the atmosphere: profile, sounding, LC
 // --- a flight, as values ---
 export * as flight from './flight';     // position, vario, attitude, stats
 export * as polar from './polar';       // sink, netto, super-netto, .plr import
+export * as varioaudio from './varioaudio';   // the sound of the air: the LAW, not the loudspeaker
 export * as igc from './igc';
 export * as trackImport from './track-import';
 
