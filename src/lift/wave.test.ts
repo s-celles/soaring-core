@@ -4,10 +4,13 @@
 // air upwind of the ridge is undisturbed (a wave is a *lee* phenomenon), and watch the
 // train decay downwind. No app state, no DEM tiles, no renderer.
 import { test, expect } from 'bun:test';
-import { waveField, waveResonance, rotorSpots, ETA_MAX, ROTOR_W, ROTOR_MAX, MIN_NODES_PER_WAVELENGTH } from './wave';
-import { nodeStep, type NodeGrid } from './grid';
+import {
+  waveField, waveResonance, rotorSpots, scorerL2, ETA_MAX, ROTOR_W, ROTOR_MAX,
+  MIN_NODES_PER_WAVELENGTH, SCORER_DZ,
+} from './wave';
+import { nodeStep, WIND_ALT, type NodeGrid } from './grid';
 import { M_PER_LAT, mPerLng } from '../geo';
-import type { ElevSampler } from '../ports';
+import type { ElevSampler, WindProfile } from '../ports';
 
 const G: NodeGrid = { cLon: 6, cLat: 45, R: 20000, n: 80 };
 const SP = nodeStep(G);               // ≈ 506 m — the grid's own node spacing
@@ -90,6 +93,82 @@ test('a finer node grid resolves a shorter wavelength end-to-end through waveFie
   const ff = waveField(fine, ridge(600, 1200, RIDGE_X), WIND, { N });
   expect(fc.res).toBeNull();
   expect(ff.res).not.toBeNull();
+});
+
+// ---- REQ-W-02: the full Scorer parameter l² = N²/U² − (1/U)·d²U/dz² ----
+
+test('scorerL2: falls back to N²/U² when the curvature is unknown, and flags it degraded', () => {
+  const { l2, degraded } = scorerL2(0.011, 15, null);
+  expect(l2).toBeCloseTo((0.011 * 0.011) / (15 * 15), 12);
+  expect(degraded).toBe(true);
+});
+
+test('scorerL2: a known curvature shifts l² away from N²/U², and is not degraded', () => {
+  const N = 0.011, U = 15, d2Udz2 = 2e-6;   // wind accelerating upward
+  const { l2, degraded } = scorerL2(N, U, d2Udz2);
+  expect(degraded).toBe(false);
+  expect(l2).toBeCloseTo((N * N) / (U * U) - d2Udz2 / U, 12);
+  expect(l2).toBeLessThan((N * N) / (U * U));   // positive curvature here REDUCES l²
+});
+
+test('curvature strong enough leaves no oscillatory solution: waveResonance returns null', () => {
+  const N = 0.011, U = 15;
+  const overwhelming = ((N * N) / (U * U)) * U * 2;   // d2Udz2/U alone exceeds N²/U²
+  expect(waveResonance([U, 0], N, 100, overwhelming)).toBeNull();
+  expect(waveResonance([U, 0], N, 100, 0)).not.toBeNull();   // curvature exactly 0 behaves like N/U
+});
+
+test('waveField: a curved wind profile is not degraded, and l² matches the finite-difference formula', () => {
+  const c = 2e-6;   // U(z) = 15 + c·z² → curvature exactly 2c everywhere, no truncation error
+  const curved: WindProfile = (alt) => [15 + c * alt * alt, 0];
+  const f = waveField(G, ridge(600, 1200, RIDGE_X), curved, { N: N_STABLE });
+  expect(f.res).not.toBeNull();
+  expect(f.res!.degraded).toBe(false);
+  const refAlt = f.refElev! + WIND_ALT;
+  const [uLo] = curved(refAlt - SCORER_DZ)!, [uHi] = curved(refAlt + SCORER_DZ)!, [U] = curved(refAlt)!;
+  const d2Udz2 = (uLo - 2 * U + uHi) / (SCORER_DZ * SCORER_DZ);
+  const expectedL2 = (N_STABLE * N_STABLE) / (U * U) - d2Udz2 / U;
+  expect(f.res!.l * f.res!.l).toBeCloseTo(expectedL2, 9);
+  expect(expectedL2).toBeLessThan((N_STABLE * N_STABLE) / (U * U));   // the curvature term bit in
+});
+
+test('waveField: a wind profile with no vertical structure has a known, zero curvature — not degraded', () => {
+  const f = waveField(G, ridge(600, 1200, RIDGE_X), WIND, { N: N_STABLE });   // uniform(15, 0)
+  expect(f.res!.degraded).toBe(false);   // curvature IS known here — it is exactly zero, not unknown
+  expect(f.res!.l).toBeCloseTo(N_STABLE / 15, 9);   // and a zero curvature reduces to plain N/U
+});
+
+// ---- REQ-W-03: trapped (l² decreasing with height) vs vertically-propagating regime ----
+
+test('wind strengthening with height traps the wave: l² decreases aloft', () => {
+  const strengthening: WindProfile = (alt) => [8 + 0.004 * (alt - 1400), 0];   // 8 → 18 m/s over TRAP_DZ
+  const f = waveField(G, flat, strengthening, { N: N_STABLE });
+  expect(f.trapped).toBe(true);
+});
+
+test('wind weakening with height does not trap: l² does not decrease aloft', () => {
+  const weakening: WindProfile = (alt) => [20 - 0.001 * (alt - 1400), 0];      // 20 → 17.5 m/s
+  const f = waveField(G, flat, weakening, { N: N_STABLE });
+  expect(f.trapped).toBe(false);
+});
+
+test('no wind data above the reference altitude: trapped is null, not a guess', () => {
+  const shallow: WindProfile = (alt) => (alt <= 2000 ? [15, 0] : null);   // sounding tops out early
+  const f = waveField(G, flat, shallow, { N: N_STABLE });
+  expect(f.trapped).toBeNull();
+});
+
+test('reversed flow aloft (a critical layer) leaves trapped null, not a false answer', () => {
+  const reversing: WindProfile = (alt) => [alt < 2500 ? 15 : -5, 0];
+  const f = waveField(G, flat, reversing, { N: N_STABLE });
+  expect(f.trapped).toBeNull();
+});
+
+test('trapped describes the atmosphere, independent of whether the wave itself gates open', () => {
+  const strengthening: WindProfile = (alt) => [8 + 0.004 * (alt - 1400), 0];
+  const f = waveField(G, flat, strengthening, { N: 0.003 });   // N below N_MIN: no wave at all
+  expect(f.res).toBeNull();
+  expect(f.trapped).toBe(true);   // yet the wind-only trapping diagnostic still resolves
 });
 
 // ---- the wave itself ----

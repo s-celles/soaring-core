@@ -9,7 +9,7 @@
 //
 // The wave is an ELEVATED phenomenon: nothing here is draped on the ground, and nothing
 // here draws. Rough (see the docs), but a value.
-import { sampleNodes, medianElev, referenceWind, type NodeGrid } from './grid';
+import { sampleNodes, medianElev, referenceWind, WIND_ALT, type NodeGrid } from './grid';
 import type { ElevSampler, WindProfile } from '../ports';
 
 export const GB = 140;          // terrain-gradient baseline (m)
@@ -27,25 +27,81 @@ export const ETA_MAX = 260;     // m: clamp η so sheets never cross
 // Rotor: a turbulent low-level roll beneath the wave crests (the hazard under the smooth wave).
 export const ROTOR_W = 0.9;     // m/s: crest updraft strong enough to spin a rotor beneath it
 export const ROTOR_THIN = 5, ROTOR_MAX = 48;   // thinning bucket + cap for rotor puffs
+// REQ-W-02: the full Scorer parameter needs the CURVATURE of the along-wind speed with height,
+// estimated as a centred finite difference over ±SCORER_DZ around the altitude asked about.
+export const SCORER_DZ = 500;   // m: half-step of the curvature finite difference
+// REQ-W-03: trapping is read off how l² changes between the ridge-top reference altitude and
+// a band TRAP_DZ higher — roughly the depth the stacked wave sheets occupy.
+export const TRAP_DZ = 2500;    // m: separation between the two altitudes compared for trapping
 
-/** The resonant response of a stable airstream to a ridge: the Scorer wavenumber l = N/U
- *  and the wavelength λ = 2π/l it sets. */
-export interface Resonance { l: number; lambda: number }
+/** The resonant response of a stable airstream to a ridge: the Scorer wavenumber l and the
+ *  wavelength λ = 2π/l it sets. `degraded` is true when l came from the simplified l = N/U
+ *  (the curvature term d²U/dz² could not be estimated — REQ-W-02) rather than the full
+ *  l² = N²/U² − (1/U)·d²U/dz². */
+export interface Resonance { l: number; lambda: number; degraded: boolean }
+
+/** The Scorer parameter l² at one altitude: N²/U² if the curvature is unknown (`d2Udz2 ===
+ *  null`), else the exact l² = N²/U² − (1/U)·d²U/dz². `degraded` flags the fallback. */
+export function scorerL2(N: number, U: number, d2Udz2: number | null): { l2: number; degraded: boolean } {
+  const l2 = d2Udz2 == null ? (N * N) / (U * U) : (N * N) / (U * U) - d2Udz2 / U;
+  return { l2, degraded: d2Udz2 == null };
+}
 
 /** Is there a lee wave at all, and at what wavelength? Null when the wind is too weak to
- *  force one, the air too neutral to oscillate, or the resulting wavelength implausible —
- *  including too short for `nodeSpacingM` to resolve without aliasing (REQ-W-01). Cheap
- *  enough to ask before touching the terrain. */
+ *  force one, the air too neutral to oscillate, the curvature term leaves no oscillatory
+ *  solution (l² ≤ 0), or the resulting wavelength is implausible — including too short for
+ *  `nodeSpacingM` to resolve without aliasing (REQ-W-01). Cheap enough to ask before
+ *  touching the terrain. `d2Udz2` is optional: omit it (or pass null) for the simplified
+ *  l = N/U, degraded-flagged (REQ-W-02). */
 export function waveResonance(
-  wind: readonly [number, number], N: number, nodeSpacingM: number,
+  wind: readonly [number, number], N: number, nodeSpacingM: number, d2Udz2: number | null = null,
 ): Resonance | null {
   const spd = Math.hypot(wind[0], wind[1]);
   if (spd < WIND_MIN) return null;          // too little wind → no wave
   if (!(N > N_MIN)) return null;            // neutral / unstable → nothing to oscillate
-  const l = N / spd, lambda = 2 * Math.PI / l;
+  const { l2, degraded } = scorerL2(N, spd, d2Udz2);
+  if (!(l2 > 0)) return null;               // curvature overwhelms N²/U² → no oscillatory solution
+  const l = Math.sqrt(l2), lambda = 2 * Math.PI / l;
   const lambdaMin = MIN_NODES_PER_WAVELENGTH * nodeSpacingM;
   if (lambda < lambdaMin || lambda > LAMBDA_MAX) return null;
-  return { l, lambda };
+  return { l, lambda, degraded };
+}
+
+/** The along-wind speed component at `alt` (projected on the unit vector `dir`), and its
+ *  vertical curvature by a centred finite difference over ±SCORER_DZ. Null (whole result,
+ *  or just the curvature) wherever `windProfile` has no answer — an unknown layer is never
+ *  guessed at. */
+function alongWind(
+  windProfile: WindProfile, alt: number, dirE: number, dirN: number,
+): { U: number; d2Udz2: number | null } | null {
+  const c = windProfile(alt); if (!c) return null;
+  const U = c[0] * dirE + c[1] * dirN;
+  const lo = windProfile(alt - SCORER_DZ), hi = windProfile(alt + SCORER_DZ);
+  const d2Udz2 = lo && hi
+    ? ((lo[0] * dirE + lo[1] * dirN) - 2 * U + (hi[0] * dirE + hi[1] * dirN)) / (SCORER_DZ * SCORER_DZ)
+    : null;
+  return { U, d2Udz2 };
+}
+
+/** REQ-W-03: is the regime trapped (l² decreasing with height — the classic condition for a
+ *  resonant lee-wave cavity) or vertically propagating (l² flat or increasing)? Null when
+ *  either altitude's l² cannot be pinned down (no profile data, or no oscillatory solution
+ *  there) — an honest "don't know", not a guess at either regime.
+ *
+ *  N is treated as constant across the two altitudes: the sounding gives one representative
+ *  stability for the layer above the ridges (REQ-W-06 note), so the vertical structure this
+ *  test can see comes from the WIND profile's curvature alone. That is the classic textbook
+ *  trapping mechanism (wind strengthening with height) and it is what the data actually
+ *  supports — see Limitations. */
+function trappedRegime(
+  windProfile: WindProfile, refAlt: number, dirE: number, dirN: number, N: number,
+): boolean | null {
+  const lo = alongWind(windProfile, refAlt, dirE, dirN);
+  const hi = alongWind(windProfile, refAlt + TRAP_DZ, dirE, dirN);
+  if (!lo || !hi || hi.U <= 0.5) return null;   // missing data, or reversed/calm flow aloft (critical layer)
+  const lo2 = scorerL2(N, lo.U, lo.d2Udz2).l2, hi2 = scorerL2(N, hi.U, hi.d2Udz2).l2;
+  if (!(lo2 > 0) || !(hi2 > 0)) return null;
+  return hi2 < lo2;
 }
 
 export interface WaveParams {
@@ -60,9 +116,14 @@ export interface WaveParams {
  *  sheets are stacked above the highest ridge and the rotor sits just above the ground. */
 export interface WaveField {
   grid: NodeGrid;
-  /** Null when there is no wave: too little wind to force one, air too neutral, or an
-   *  implausible wavelength. The field is then empty. */
+  /** Null when there is no wave: too little wind to force one, air too neutral, no
+   *  oscillatory solution, or an implausible wavelength. The field is then empty. */
   res: Resonance | null;
+  /** REQ-W-03: trapped (stacked sheets share one η), vertically propagating (phase tilts,
+   *  amplitude decays with height), or null — the regime could not be determined, and the
+   *  renderer must say so rather than default to either. Independent of `res`: it describes
+   *  the atmosphere, not whether the wind/λ gates happened to pass. */
+  trapped: boolean | null;
   refElev: number | null; wind: [number, number];
   lon: Float64Array; lat: Float64Array;                     // node coordinates, by i and by j
   w: Float32Array; eta: Float32Array; h: Float32Array; ok: Uint8Array;
@@ -86,9 +147,20 @@ export function waveField(
   // side of WIND_MIN, so the wave appeared and vanished as the view was panned.
   const refElev = medianElev(t);
   const wind = referenceWind(refElev, windProfile);
-  const res = waveResonance(wind, p.N, t.sp);
+  const spd0 = Math.hypot(wind[0], wind[1]);
+
+  // REQ-W-02/03: the curvature of U(z) at the reference altitude (feeds the full Scorer l²),
+  // and the trapping test (l² a couple of km higher, same direction — see trappedRegime).
+  let d2Udz2: number | null = null, trapped: boolean | null = null;
+  if (refElev != null && spd0 > 0) {
+    const dirE = wind[0] / spd0, dirN = wind[1] / spd0, refAlt = refElev + WIND_ALT;
+    d2Udz2 = alongWind(windProfile, refAlt, dirE, dirN)?.d2Udz2 ?? null;
+    trapped = trappedRegime(windProfile, refAlt, dirE, dirN, p.N);
+  }
+
+  const res = waveResonance(wind, p.N, t.sp, d2Udz2);
   const empty = (): WaveField => ({
-    grid: g, res: null, refElev, wind, lon, lat,
+    grid: g, res: null, trapped, refElev, wind, lon, lat,
     w: new Float32Array(total), eta: new Float32Array(total), h, ok,
     maxTerr: -Infinity, ready: t.ready, total,
   });
@@ -122,7 +194,7 @@ export function waveField(
     w[idx] = ws * amp * stepM / lambda;
     eta[idx] = Math.max(-etaMax, Math.min(etaMax, we * etaGain * stepM / lambda));
   }
-  return { grid: g, res, refElev, wind, lon, lat, w, eta, h, ok, maxTerr, ready: t.ready, total };
+  return { grid: g, res, trapped, refElev, wind, lon, lat, w, eta, h, ok, maxTerr, ready: t.ready, total };
 }
 
 /** Where a rotor rolls: a spot under a crest whose updraft is strong enough to spin one,
