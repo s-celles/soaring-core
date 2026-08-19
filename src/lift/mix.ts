@@ -8,15 +8,18 @@
 // polygon, a point inside maps to weights that sum to 1, and weights map back to a point.
 // The SVG widget that draws it is not the kernel's business.
 
-export interface LiftComp { key: string; ik: string; color: [number, number, number] }
+export interface LiftComp { key: string; ik: string; color: [number, number, number]; hintIk?: string }
 
 // Mixer order = vertex order. Add an entry here (with its i18n label key and a renderer wired
 // in the app) and the mixer grows a vertex automatically. `color` is the vertex swatch.
+// `hintIk`, when present, is an i18n key for a tooltip on the component's checkbox — used by
+// `wave` (REQ-W-07) to disclose that the rotor markers are an indicative hazard cue, not a
+// computed rotor location.
 export const LIFT_COMPS: LiftComp[] = [
   { key: 'thermal', ik: 'liftThermal', color: [235, 140, 60] },
   { key: 'slope', ik: 'liftSlope', color: [150, 200, 90] },
   { key: 'converg', ik: 'liftConverg', color: [110, 190, 165] },
-  { key: 'wave', ik: 'liftWave', color: [175, 140, 225] },
+  { key: 'wave', ik: 'liftWave', color: [175, 140, 225], hintIk: 'liftWaveHint' },
 ];
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));

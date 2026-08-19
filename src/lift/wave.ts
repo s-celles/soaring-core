@@ -197,9 +197,14 @@ export function waveField(
   return { grid: g, res, trapped, refElev, wind, lon, lat, w, eta, h, ok, maxTerr, ready: t.ready, total };
 }
 
-/** Where a rotor rolls: a spot under a crest whose updraft is strong enough to spin one,
- *  thinned to one per bucket and capped, with a size that grows with the crest. Positions
- *  and sizes only — what to draw there is the renderer's business. */
+/** REQ-W-07: this is NOT a rotor-detection model — there is no boundary-layer separation
+ *  criterion here, nothing about the low-level wind shear a real rotor needs to spin up. It
+ *  is a graphical placement rule: a fixed height band (ROTOR_HGT) under nodes whose crest
+ *  updraft clears ROTOR_W, which the resonant decay happens to concentrate under the first
+ *  crest downwind — where a rotor most often IS, in the textbook picture. Treat it as an
+ *  indicative hazard marker ("expect turbulence near here on a wave day"), not a computed
+ *  rotor location; the caller (viewer UI and docs) must say so. Positions and sizes only —
+ *  what to draw there is the renderer's business. */
 export interface RotorSpot { lon: number; lat: number; elev: number; size: number }
 
 export function rotorSpots(f: WaveField, thin = ROTOR_THIN, max = ROTOR_MAX): RotorSpot[] {
