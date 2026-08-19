@@ -15,7 +15,12 @@ import type { ElevSampler, WindProfile } from '../ports';
 export const GB = 140;          // terrain-gradient baseline (m)
 export const WIND_MIN = 7;      // m/s: weakest cross-ridge wind that makes wave (~25 km/h)
 export const N_MIN = 0.006;     // 1/s: weakest stability that makes wave
-export const LAMBDA_MIN = 2000, LAMBDA_MAX = 35000;   // m: plausible lee-wave wavelengths
+// A resonant sinusoid sampled on a lattice needs several nodes per wavelength or it aliases —
+// at 3 nodes/λ the "wave" the field draws is a sampling artefact, not the sin() it computes.
+// So the SHORT end of the plausible band is derived from the caller's own mesh, not fixed: a
+// fine grid can resolve a shorter λ, a coarse one cannot, whatever LAMBDA_MIN used to say.
+export const MIN_NODES_PER_WAVELENGTH = 6;
+export const LAMBDA_MAX = 35000;   // m: plausible lee-wave wavelengths — an upper sanity bound only
 export const AMP = 1.6;         // display gain on the vertical-velocity (w) response
 export const ETA_GAIN = 320;    // gain on the streamline vertical displacement η (m)
 export const ETA_MAX = 260;     // m: clamp η so sheets never cross
@@ -28,14 +33,18 @@ export const ROTOR_THIN = 5, ROTOR_MAX = 48;   // thinning bucket + cap for roto
 export interface Resonance { l: number; lambda: number }
 
 /** Is there a lee wave at all, and at what wavelength? Null when the wind is too weak to
- *  force one, the air too neutral to oscillate, or the resulting wavelength implausible.
- *  Cheap enough to ask before touching the terrain. */
-export function waveResonance(wind: readonly [number, number], N: number): Resonance | null {
+ *  force one, the air too neutral to oscillate, or the resulting wavelength implausible —
+ *  including too short for `nodeSpacingM` to resolve without aliasing (REQ-W-01). Cheap
+ *  enough to ask before touching the terrain. */
+export function waveResonance(
+  wind: readonly [number, number], N: number, nodeSpacingM: number,
+): Resonance | null {
   const spd = Math.hypot(wind[0], wind[1]);
   if (spd < WIND_MIN) return null;          // too little wind → no wave
   if (!(N > N_MIN)) return null;            // neutral / unstable → nothing to oscillate
   const l = N / spd, lambda = 2 * Math.PI / l;
-  if (lambda < LAMBDA_MIN || lambda > LAMBDA_MAX) return null;
+  const lambdaMin = MIN_NODES_PER_WAVELENGTH * nodeSpacingM;
+  if (lambda < lambdaMin || lambda > LAMBDA_MAX) return null;
   return { l, lambda };
 }
 
@@ -77,7 +86,7 @@ export function waveField(
   // side of WIND_MIN, so the wave appeared and vanished as the view was panned.
   const refElev = medianElev(t);
   const wind = referenceWind(refElev, windProfile);
-  const res = waveResonance(wind, p.N);
+  const res = waveResonance(wind, p.N, t.sp);
   const empty = (): WaveField => ({
     grid: g, res: null, refElev, wind, lon, lat,
     w: new Float32Array(total), eta: new Float32Array(total), h, ok,

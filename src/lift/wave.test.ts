@@ -4,12 +4,13 @@
 // air upwind of the ridge is undisturbed (a wave is a *lee* phenomenon), and watch the
 // train decay downwind. No app state, no DEM tiles, no renderer.
 import { test, expect } from 'bun:test';
-import { waveField, waveResonance, rotorSpots, ETA_MAX, ROTOR_W, ROTOR_MAX } from './wave';
-import type { NodeGrid } from './grid';
+import { waveField, waveResonance, rotorSpots, ETA_MAX, ROTOR_W, ROTOR_MAX, MIN_NODES_PER_WAVELENGTH } from './wave';
+import { nodeStep, type NodeGrid } from './grid';
 import { M_PER_LAT, mPerLng } from '../geo';
 import type { ElevSampler } from '../ports';
 
 const G: NodeGrid = { cLon: 6, cLat: 45, R: 20000, n: 80 };
+const SP = nodeStep(G);               // ≈ 506 m — the grid's own node spacing
 const mLng = mPerLng(G.cLat);
 const east = (lon: number) => (lon - G.cLon) * mLng;
 
@@ -21,7 +22,7 @@ const ridge = (h: number, L: number, x0: number): ElevSampler =>
 const WEST_WIND = [15, 0] as const;   // 15 m/s towards the east
 const N_STABLE = 0.011;               // 1/s — a stable airstream
 const RIDGE_X = -8000;                // the ridge sits upwind of the domain centre
-const RES = waveResonance(WEST_WIND, N_STABLE)!;
+const RES = waveResonance(WEST_WIND, N_STABLE, SP)!;
 /** A wind that is the same at every height. */
 const uniform = (u: number, v: number) => () => [u, v] as [number, number];
 const WIND = uniform(15, 0);
@@ -52,11 +53,43 @@ test('the Scorer relation: λ = 2π·U/N', () => {
 });
 
 test('no wave without wind, without stability, or at an implausible wavelength', () => {
-  expect(waveResonance([6, 0], N_STABLE)).toBeNull();      // too little wind to force one
-  expect(waveResonance([15, 0], 0.005)).toBeNull();        // neutral air: nothing to oscillate
-  expect(waveResonance([7, 0], 0.03)).toBeNull();          // λ ≈ 1.5 km — too short to be real
-  expect(waveResonance([35, 0], 0.0061)).toBeNull();       // λ ≈ 36 km — too long to be real
-  expect(waveResonance([15, 0], N_STABLE)).not.toBeNull();
+  expect(waveResonance([6, 0], N_STABLE, SP)).toBeNull();      // too little wind to force one
+  expect(waveResonance([15, 0], 0.005, SP)).toBeNull();        // neutral air: nothing to oscillate
+  expect(waveResonance([7, 0], 0.03, SP)).toBeNull();          // λ ≈ 1.5 km — below even a fine mesh's floor
+  expect(waveResonance([35, 0], 0.0061, SP)).toBeNull();       // λ ≈ 36 km — too long to be real
+  expect(waveResonance([15, 0], N_STABLE, SP)).not.toBeNull();
+});
+
+// ---- REQ-W-01: the short end of the plausible band comes from the MESH, not a fixed constant ----
+
+test('a wavelength that only spans a handful of nodes is rejected as aliased', () => {
+  // wind=15, N=0.02 → λ ≈ 4712 m. On a 1000 m mesh that is under 6 nodes/λ: reject.
+  // On a 200 m mesh the same physical wave spans over 20 nodes: resolve it.
+  const N = 0.02, lambda = 2 * Math.PI * 15 / N;
+  expect(lambda / 1000).toBeLessThan(MIN_NODES_PER_WAVELENGTH);
+  expect(waveResonance([15, 0], N, 1000)).toBeNull();
+  expect(waveResonance([15, 0], N, 200)).not.toBeNull();
+});
+
+test('the mesh-derived floor is exactly MIN_NODES_PER_WAVELENGTH × spacing', () => {
+  const spacing = 640;   // the viewer's own NODE_M
+  const floor = MIN_NODES_PER_WAVELENGTH * spacing;
+  // N picked so the boundary wind U clears WIND_MIN — the wavelength floor is the only gate
+  // separating the two cases below, not the wind-speed one.
+  const N = 0.02, U = N * floor / (2 * Math.PI);
+  expect(U).toBeGreaterThan(7);
+  expect(waveResonance([U * 0.999, 0], N, spacing)).toBeNull();       // just under the floor
+  expect(waveResonance([U * 1.05, 0], N, spacing)).not.toBeNull();    // comfortably over it
+});
+
+test('a finer node grid resolves a shorter wavelength end-to-end through waveField', () => {
+  const N = 0.02;   // λ ≈ 4712 m with the 15 m/s test wind
+  const coarse: NodeGrid = { cLon: 6, cLat: 45, R: 20000, n: 21 };    // 2000 m spacing → 6 nodes/λ ≈ 2357 m, too coarse
+  const fine: NodeGrid = { cLon: 6, cLat: 45, R: 20000, n: 200 };     // ≈ 201 m spacing → plenty of nodes/λ
+  const fc = waveField(coarse, ridge(600, 1200, RIDGE_X), WIND, { N });
+  const ff = waveField(fine, ridge(600, 1200, RIDGE_X), WIND, { N });
+  expect(fc.res).toBeNull();
+  expect(ff.res).not.toBeNull();
 });
 
 // ---- the wave itself ----
@@ -89,7 +122,7 @@ test('downwind of the ridge the flow oscillates at exactly the resonant waveleng
 
 test('a shorter wavelength comes out of a stronger stability', () => {
   // λ = 2π·U/N: double N, halve λ — the wave train packs together.
-  const soft = waveResonance(WEST_WIND, 0.008)!, hard = waveResonance(WEST_WIND, 0.016)!;
+  const soft = waveResonance(WEST_WIND, 0.008, SP)!, hard = waveResonance(WEST_WIND, 0.016, SP)!;
   expect(hard.lambda).toBeCloseTo(soft.lambda / 2, 6);
   const zsSoft = zeros(profile(waveField(G, ridge(600, 1200, RIDGE_X), WIND, { N: 0.008 })), RIDGE_X);
   const zsHard = zeros(profile(waveField(G, ridge(600, 1200, RIDGE_X), WIND, { N: 0.016 })), RIDGE_X);
