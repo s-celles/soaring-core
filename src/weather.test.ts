@@ -74,6 +74,29 @@ test('weatherStability: N > 0 in a stable top layer, NaN when neutral/unstable',
   expect(weatherStability(unstable, 12)).toBeNaN();
 });
 
+test('weatherStability (REQ-W-06): picks the layer within STABILITY_CAP, not simply the topmost', () => {
+  // A deep 7-level sounding (surface at 200 m): a STABLE layer at 1200→3200 m, then a much
+  // more stable one from 6000→9000 m — up in the upper troposphere, well above STABILITY_CAP
+  // (5500 m above the surface, i.e. above 5700 m here). Blindly taking the top pair would read
+  // the upper-tropospheric layer; REQ-W-06 wants the one actually above the ridges.
+  const deep = wx({ tprof: [
+    { alt: 200, T: 25 }, { alt: 1200, T: 17 }, { alt: 3200, T: 9 },   // 4 K/km: mildly stable
+    { alt: 6000, T: -20 }, { alt: 9000, T: -70 },                    // 16.7 K/km: extremely stable, but too high
+  ] });
+  const inCapOnly = wx({ tprof: [{ alt: 200, T: 25 }, { alt: 1200, T: 17 }, { alt: 3200, T: 9 }] });
+  expect(weatherStability(deep, 12)).toBeCloseTo(weatherStability(inCapOnly, 12), 6);
+});
+
+test('weatherStability (REQ-W-06): falls back to the lowest pair when every level exceeds the cap', () => {
+  const tooHigh = wx({ tprof: [{ alt: 200, T: 10 }, { alt: 6200, T: -30 }, { alt: 9200, T: -70 }] });
+  // Neither pair is within STABILITY_CAP of the 200 m surface — the lowest pair is used rather
+  // than returning NaN outright, so a very high site still gets an (honestly rougher) estimate.
+  const a = { alt: 200, T: 10 }, b = { alt: 6200, T: -30 };
+  const dz = b.alt - a.alt, dThetaDz = (b.T - a.T) / dz + 0.0098;
+  const expected = Math.sqrt(9.81 / ((a.T + b.T) / 2 + 273.15) * dThetaDz);
+  expect(weatherStability(tooHigh, 12)).toBeCloseTo(expected, 9);
+});
+
 test('weatherCloudbase + weatherSounding expose the hour, clamped to the day', () => {
   expect(weatherCloudbase(wx(), 12)).toBe(1500);
   expect(weatherCloudbase(wx(), 999)).toBe(1500);         // hour clamped, not out of range
@@ -160,7 +183,8 @@ test('parseOpenMeteo: builds the hours from the API payload, sorted by altitude'
   expect(w.ref).toBe(300);
   expect(w.hours.length).toBe(1);
   const h = w.hours[0];
-  expect(h.prof.map(p => p.alt)).toEqual([310, 800, 1500, 2200]);   // surface + the 3 levels, ascending
+  // surface + the 7 levels, ascending
+  expect(h.prof.map(p => p.alt)).toEqual([310, 800, 1500, 2200, 2900, 3600, 4300, 5000]);
   expect(h.prof[0].u).toBeCloseTo(5, 6);                            // westerly surface wind
   expect(h.tprof[0]).toEqual({ alt: 300, T: 25 });
   expect(h.cloudbase).toBeCloseTo(lclBase(25, 50, 300)!, 6);

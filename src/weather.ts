@@ -36,9 +36,20 @@ export interface WxKnobs {
   rh: number;      // surface relative humidity (%)
 }
 
-export const LEVELS = [925, 850, 700];   // hPa: through the convective layer
+// REQ-W-06: 925/850/700 hPa cover the convective layer (thermal ceiling); 600/500/400/300 hPa
+// reach the stability aloft that actually governs a lee wave — a fair-weather inversion, or the
+// layer above an alpine ridge, is very often above 700 hPa. Both Open-Meteo endpoints the app
+// reads (api.open-meteo.com/v1/forecast and historical-forecast-api.open-meteo.com/v1/forecast)
+// serve all seven; the ERA5 *archive* endpoint (a different host, not used here) serves none —
+// see fetchWx in the app's weather.ts for why that one is avoided for past days.
+export const LEVELS = [925, 850, 700, 600, 500, 400, 300];   // hPa
 export const DRY = 0.0098;               // dry-adiabatic lapse rate (K/m)
 export const TRIGGER_EXCESS = 1.5;       // K: thermal parcel excess over ambient (superadiabatic surface layer)
+// REQ-W-06: weatherStability picks its layer from the sounding rather than always the very top
+// two levels — with 7 levels now reaching to 300 hPa (~9 km), the topmost pair would sit in the
+// upper troposphere, well above anything a ridge forces. STABILITY_CAP bounds how high above the
+// surface the search still counts as "the layer above the ridges".
+export const STABILITY_CAP = 5500;       // m above the surface
 const G = 9.81;
 
 /** Met wind (speed, direction it blows FROM in °) → velocity vector it blows TO (east, north). */
@@ -159,13 +170,20 @@ export function weatherSounding(wx: Wx, hour: number): Sounding | null {
   return { ref: wx.ref, t2m: h.t2m, tprof: h.tprof, cloudbase: h.cloudbase, ceiling: weatherConvTop(wx, hour) };
 }
 
-/** Static stability as the Brunt–Väisälä frequency N (1/s) in the layer above the
- *  ridges (the upper sounding levels), for the lee-wave model. NaN when the layer is
- *  neutral/unstable (no wave) or the sounding is unavailable. */
+/** Static stability as the Brunt–Väisälä frequency N (1/s) in the layer above the ridges,
+ *  for the lee-wave model. REQ-W-06: that layer is the HIGHEST adjacent pair of sounding
+ *  levels that still stays within STABILITY_CAP of the surface — not simply the top of
+ *  whatever the sounding carries, which with the extended LEVELS can reach well into the
+ *  upper troposphere. Falls back to the topmost pair when every level exceeds the cap (a
+ *  very high site), same as before REQ-W-06. NaN when the chosen layer is neutral/unstable
+ *  (no wave) or the sounding is unavailable. */
 export function weatherStability(wx: Wx, hour: number): number {
   const tp = wx.hours[clampHour(wx, hour)]?.tprof;
   if (!tp || tp.length < 2) return NaN;
-  const a = tp[tp.length - 2], b = tp[tp.length - 1], dz = b.alt - a.alt;   // top layer (above the ridges)
+  const cap = wx.ref + STABILITY_CAP;
+  let hi = tp.length - 1;
+  while (hi > 1 && tp[hi].alt > cap) hi--;   // the highest pair still within the wave-relevant depth
+  const a = tp[hi - 1], b = tp[hi], dz = b.alt - a.alt;
   if (dz < 100) return NaN;
   const dThetaDz = (b.T - a.T) / dz + DRY;         // potential-temp gradient (K/m)
   if (dThetaDz <= 0) return NaN;                    // neutral / unstable → no wave
