@@ -165,3 +165,52 @@ test('unknown ground does not veto a wave climb', () => {
   // still be reported — refusing to guess is not the same as refusing to see.
   expect(detectWaveClimbs(waveBeat(400, 1.5), () => null).length).toBe(1);
 });
+
+// ---- REQ-W-05: a tow is not wave, however straight and high it climbs ----
+
+/** An aerotow: straight climb from the ground at a brisk rate, then an abrupt drop in rate
+ *  (the release) followed by a fast descent — the tug peeling off, or the glider gliding. */
+const towProfile = (climbRate: number) => probe(0, 500, t => [
+  t * 15, 0,
+  1000 + (t <= 300 ? climbRate * t : climbRate * 300 - 8 * (t - 300)),
+]);
+
+test('an aerotow — ground start, a release, a sharp drop — is not wave', () => {
+  expect(detectWaveClimbs(towProfile(3), GROUND)).toEqual([]);
+});
+
+test('a fast ground-start climb is rejected even without a visible release in the track', () => {
+  // The probe simply ends mid-tow (no post-release data to show the drop) — the climb-rate
+  // ceiling alone must still catch it: MAX_CLIMB is 6 m/s, this one climbs at 8.
+  const fastTow = probe(0, 200, t => [t * 15, 0, 1000 + 8 * t]);
+  expect(detectWaveClimbs(fastTow, GROUND)).toEqual([]);
+});
+
+test('a HIGH-altitude, FAST, or gradually-fading climb is never caught by the tow tests', () => {
+  // The tow tests are anchored on a ground-level start (TOW_START_AGL). A glider already at
+  // 2500 m — however fast it climbs, however its rate fades at the end — is not a takeoff.
+  const strongWave = waveBeat(400, 5.5);                                  // fast, but high up
+  expect(detectWaveClimbs(strongWave, GROUND).length).toBe(1);
+  const fadingWave = probe(0, 400, t => [
+    t * 12, Math.sin(t / 200) * 40, 2500 + (t < 300 ? 1.5 * t : 450 - 0.3 * (t - 300)),
+  ]);                                                                     // eases off, does not crash
+  expect(detectWaveClimbs(fadingWave, GROUND).length).toBe(1);
+});
+
+test('a tug shadowing a glider — same profile, rope distance apart — is a tow: neither counts', () => {
+  // Both start high (2500 m) and climb gently: neither the ground-start nor the climb-rate nor
+  // the release test would catch this pair. Only the companion-aircraft signal can.
+  const glider = probe(0, 400, t => [t * 10, 0, 2500 + 1.2 * t]);
+  const tug = probe(0, 400, t => [t * 10, 60, 2500 + 1.2 * t]);           // 60 m off its wing
+  expect(detectWaveClimbs(glider, GROUND).length).toBe(1);                // alone, it reads as wave
+  expect(detectWave([glider, tug], GROUND)).toEqual([]);                  // paired, neither does
+});
+
+test('two beats a rope-length apart only matter while they actually overlap in time', () => {
+  // The tug lands after 200 s; the glider keeps climbing alone for another 200 s. The shared
+  // portion is a tow, but the glider flew most of its climb solo — TOW_PAIR_FRAC must not
+  // condemn a climb whose companion left early.
+  const glider = probe(0, 400, t => [t * 10, 0, 2500 + 1.2 * t]);
+  const tug = probe(0, 150, t => [t * 10, 60, 2500 + 1.2 * t]);
+  expect(detectWave([glider, tug], GROUND).length).toBe(1);
+});
