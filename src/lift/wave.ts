@@ -33,6 +33,13 @@ export const SCORER_DZ = 500;   // m: half-step of the curvature finite differen
 // REQ-W-03: trapping is read off how l² changes between the ridge-top reference altitude and
 // a band TRAP_DZ higher — roughly the depth the stacked wave sheets occupy.
 export const TRAP_DZ = 2500;    // m: separation between the two altitudes compared for trapping
+// REQ-W-08: linear lee-wave theory is a small-amplitude approximation — it assumes the ridge is
+// modest next to N/U. Nh/U (the inverse Froude number) is the standard way to size that: past
+// about 1, the atmosphere starts breaking waves, blocking the flow low down, or forming a
+// hydraulic jump — exactly the violent regime a pilot most wants to know about, and exactly what
+// a linear response cannot represent. FROUDE_MAX gates the field shut there rather than draw a
+// smooth sheet over what is actually a rotor-and-breaking day.
+export const FROUDE_MAX = 1.0;
 
 /** The resonant response of a stable airstream to a ridge: the Scorer wavenumber l and the
  *  wavelength λ = 2π/l it sets. `degraded` is true when l came from the simplified l = N/U
@@ -138,9 +145,12 @@ export function waveField(
   const n = g.n, total = n * n;
 
   // Pass 1: terrain forcing along the wind, w₀ = wind·∇terrain (m/s), per node; and the
-  // highest ridge, so the elevated sheets can sit above the terrain.
+  // highest ridge, so the elevated sheets can sit above the terrain — and so REQ-W-08 can
+  // size the ridge BEFORE deciding whether linear theory still applies to it.
   const t = sampleNodes(g, elev, gb);
   const { ok, h, gx, gy, sp, lon, lat } = t;
+  let maxTerr = -Infinity;
+  for (let idx = 0; idx < total; idx++) if (ok[idx] && h[idx] > maxTerr) maxTerr = h[idx];
 
   // The wind that crosses the RIDGES, read over the typical ground in view. Reading it under
   // the camera swung it by a factor of 3 on real terrain — enough to put the wind on either
@@ -158,7 +168,16 @@ export function waveField(
     trapped = trappedRegime(windProfile, refAlt, dirE, dirN, p.N);
   }
 
-  const res = waveResonance(wind, p.N, t.sp, d2Udz2);
+  let res = waveResonance(wind, p.N, t.sp, d2Udz2);
+  // REQ-W-08: linear lee-wave theory assumes a MODEST mountain — it has nothing honest to say
+  // once Nh/U (the inverse Froude number) gets large: that is exactly where the real atmosphere
+  // starts breaking waves, blocking the flow, or forming a hydraulic jump, which is precisely
+  // what a pilot needs to know about and what this linear response cannot represent. Close the
+  // gate rather than draw a smooth sheet over a day that is actually violent.
+  if (res && refElev != null && spd0 > 0) {
+    const ridgeHeight = Math.max(0, maxTerr - refElev);
+    if ((p.N * ridgeHeight) / spd0 > FROUDE_MAX) res = null;
+  }
   const empty = (): WaveField => ({
     grid: g, res: null, trapped, refElev, wind, lon, lat,
     w: new Float32Array(total), eta: new Float32Array(total), h, ok,
@@ -166,13 +185,11 @@ export function waveField(
   });
   if (!res) return empty();
   const { l, lambda } = res;
-  const spd = Math.hypot(wind[0], wind[1]);
+  const spd = spd0;
   const F = new Float32Array(total);
-  let maxTerr = -Infinity;
   for (let idx = 0; idx < total; idx++) {
     if (!ok[idx]) continue;
     F[idx] = wind[0] * gx[idx] + wind[1] * gy[idx];
-    if (h[idx] > maxTerr) maxTerr = h[idx];
   }
 
   // Pass 2: convolve the UPWIND forcing with a decaying resonant kernel — the vertical

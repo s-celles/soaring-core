@@ -6,7 +6,7 @@
 import { test, expect } from 'bun:test';
 import {
   waveField, waveResonance, rotorSpots, scorerL2, ETA_MAX, ROTOR_W, ROTOR_MAX,
-  MIN_NODES_PER_WAVELENGTH, SCORER_DZ,
+  MIN_NODES_PER_WAVELENGTH, SCORER_DZ, FROUDE_MAX,
 } from './wave';
 import { nodeStep, WIND_ALT, type NodeGrid } from './grid';
 import { M_PER_LAT, mPerLng } from '../geo';
@@ -225,8 +225,34 @@ test('a taller ridge drives a stronger wave', () => {
   expect(amp(big)).toBeGreaterThan(amp(small));
 });
 
+// ---- REQ-W-08: linear theory does not apply once N·h/U (inverse Froude) gets too large ----
+
+test('a mountain far taller than N/U can support closes the gate', () => {
+  // N=0.011, U=15 → the Froude limit is at a ridge height of U·FROUDE_MAX/N ≈ 1364 m.
+  const tooTall = waveField(G, ridge(2000, 800, RIDGE_X), WIND, { N: N_STABLE });   // ≈2000 m ridge
+  expect(tooTall.res).toBeNull();
+  expect(Array.from(tooTall.w).every(v => v === 0)).toBe(true);
+});
+
+test('the same tall ridge is fine again once the wind is strong enough to lower N·h/U', () => {
+  const strongerWind = uniform(40, 0);   // N·h/U ≈ 0.011·2000/40 ≈ 0.55, comfortably under FROUDE_MAX
+  const f = waveField(G, ridge(2000, 800, RIDGE_X), strongerWind, { N: N_STABLE });
+  expect(f.res).not.toBeNull();
+});
+
+test('the gate sits at N·h/U = FROUDE_MAX, not at some other ad-hoc height', () => {
+  const U = 15, h = (U * FROUDE_MAX) / N_STABLE;   // the ridge height that puts N·h/U at the limit
+  const justUnder = waveField(G, ridge(h * 0.9, 800, RIDGE_X), uniform(U, 0), { N: N_STABLE });
+  const justOver = waveField(G, ridge(h * 1.15, 800, RIDGE_X), uniform(U, 0), { N: N_STABLE });
+  expect(justUnder.res).not.toBeNull();
+  expect(justOver.res).toBeNull();
+});
+
 test('the streamline displacement is clamped, so the stacked sheets can never cross', () => {
-  const f = waveField(G, ridge(3000, 1200, RIDGE_X), WIND, { N: N_STABLE });   // an absurd ridge
+  // A steep ridge (same h/L ratio as the old "absurd" 3000/1200, scaled down to stay inside
+  // FROUDE_MAX — REQ-W-08 now closes the gate on a ridge that tall at this N and wind).
+  const f = waveField(G, ridge(1200, 480, RIDGE_X), WIND, { N: N_STABLE });
+  expect(f.res).not.toBeNull();
   for (const v of f.eta) expect(Math.abs(v)).toBeLessThanOrEqual(ETA_MAX);
   expect(Math.max(...Array.from(f.eta))).toBeCloseTo(ETA_MAX, 6);   // and it does reach the clamp
 });
@@ -261,8 +287,10 @@ test('rotors roll only under strong crests, thinned and capped', () => {
 
 test('the cap holds even when a single row is full of crests', () => {
   // A long ridge across the flow puts a strong crest in every column, so one row alone can
-  // fill the quota. The cap has to be honoured per spot, not per row.
-  const f = waveField(G, ridge(1500, 3000, RIDGE_X), WIND, { N: N_STABLE });
+  // fill the quota. The cap has to be honoured per spot, not per row. (Same h/L ratio as
+  // before, scaled down to stay inside FROUDE_MAX — REQ-W-08.)
+  const f = waveField(G, ridge(1300, 2600, RIDGE_X), WIND, { N: N_STABLE });
+  expect(f.res).not.toBeNull();
   expect(rotorSpots(f, 1, 5).length).toBe(5);        // thinning off: every node qualifies
   expect(rotorSpots(f, 1, 1).length).toBe(1);
 });
